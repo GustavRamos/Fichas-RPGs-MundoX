@@ -149,3 +149,13 @@ body{
   }
   .field{ outline:none !important; background:transparent !important; }
 }
+
+.field.checkbox{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.field .input.checkbox{
+  width:18px;
+  height:18px;
+}
