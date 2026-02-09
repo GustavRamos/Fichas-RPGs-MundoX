@@ -312,3 +312,32 @@ function wireUI(){
   renderAll();
   wireUI();
 })();
+
+// --- Checkbox (salva 1/0) ---
+if (field.type === "checkbox") {
+  wrap.classList.add("checkbox");
+
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.className = "input checkbox";
+
+  cb.checked = Number(data[field.id] ?? 0) === 1;
+
+  fieldInputs.set(field.id, cb);
+
+  cb.addEventListener("change", () => {
+    data[field.id] = cb.checked ? 1 : 0;
+    saveData();
+    recomputeAll();
+  });
+
+  cb.addEventListener("mousedown", (e) => e.stopPropagation());
+
+  wrap.appendChild(cb);
+
+  const resizer = document.createElement("div");
+  resizer.className = "resizer";
+  wrap.appendChild(resizer);
+
+  return wrap;
+}
