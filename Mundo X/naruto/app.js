@@ -53,20 +53,122 @@ const FN = {
   min: Math.min, max: Math.max, abs: Math.abs,
 };
 
+// --- parser sem eval/new Function (funciona com CSP/SES) ---
+function tokenizeExpr(s){
+  const out = [];
+  let i = 0;
+
+  while(i < s.length){
+    const c = s[i];
+    if(/\s/.test(c)){ i++; continue; }
+
+    if(/[0-9.]/.test(c)){
+      let j = i+1;
+      while(j < s.length && /[0-9.]/.test(s[j])) j++;
+      out.push({t:"num", v: parseFloat(s.slice(i,j))});
+      i = j; continue;
+    }
+
+    if(/[a-zA-Z_]/.test(c)){
+      let j = i+1;
+      while(j < s.length && /[a-zA-Z0-9_]/.test(s[j])) j++;
+      out.push({t:"id", v: s.slice(i,j)});
+      i = j; continue;
+    }
+
+    if("+-*/(),".includes(c)){
+      out.push({t:c, v:c});
+      i++; continue;
+    }
+
+    return null;
+  }
+  return out;
+}
+
 function evalCalc(expr){
-  if(!expr || typeof expr !== "string") return 0;
-  const ok = /^[0-9+\-*/().,\s_a-zA-Z]+$/.test(expr);
-  if(!ok) return 0;
+  try{
+    if(!expr || typeof expr !== "string") return 0;
 
-  const replaced = expr.replace(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g, (name) => {
-    if(Object.prototype.hasOwnProperty.call(FN, name)) return `FN.${name}`;
-    return `vars.${name}`;
-  });
+    const tokens = tokenizeExpr(expr);
+    if(!tokens) return 0;
 
-  // eslint-disable-next-line no-new-func
-  const fn = new Function("vars", "FN", `try { return (${replaced}); } catch(e){ return 0; }`);
-  const vars = new Proxy({}, { get: (_, k) => num(k) });
-  return toNumber(fn(vars, FN));
+    let p = 0;
+    const peek = () => tokens[p];
+    const next = () => tokens[p++];
+
+    const parseExpr = () => {
+      let v = parseTerm();
+      while(peek() && (peek().t === "+" || peek().t === "-")){
+        const op = next().t;
+        const r = parseTerm();
+        v = (op === "+") ? (v + r) : (v - r);
+      }
+      return v;
+    };
+
+    const parseTerm = () => {
+      let v = parseUnary();
+      while(peek() && (peek().t === "*" || peek().t === "/")){
+        const op = next().t;
+        const r = parseUnary();
+        v = (op === "*") ? (v * r) : ((r === 0) ? 0 : (v / r));
+      }
+      return v;
+    };
+
+    const parseUnary = () => {
+      if(peek() && peek().t === "-"){ next(); return -parseUnary(); }
+      return parsePrimary();
+    };
+
+    const parseArgs = () => {
+      const args = [];
+      if(peek() && peek().t === ")") return args;
+      args.push(parseExpr());
+      while(peek() && peek().t === ","){ next(); args.push(parseExpr()); }
+      return args;
+    };
+
+    const parsePrimary = () => {
+      const tok = peek();
+      if(!tok) return 0;
+
+      if(tok.t === "("){
+        next();
+        const v = parseExpr();
+        if(peek() && peek().t === ")") next();
+        return v;
+      }
+
+      if(tok.t === "num"){ next(); return Number.isFinite(tok.v) ? tok.v : 0; }
+
+      if(tok.t === "id"){
+        const name = tok.v; next();
+
+        if(peek() && peek().t === "("){
+          next();
+          const args = parseArgs();
+          if(peek() && peek().t === ")") next();
+
+          const fn = FN?.[name];
+          if(typeof fn !== "function") return 0;
+          const res = fn(...args);
+          return Number.isFinite(res) ? res : 0;
+        }
+
+        return num(name);
+      }
+
+      return 0;
+    };
+
+    const result = parseExpr();
+    if(p < tokens.length) return 0;
+    return toNumber(result);
+  }catch{
+    return 0;
+  }
 }
 
 function recomputeAll(){
@@ -82,7 +184,8 @@ function recomputeAll(){
       data[field.id] = out;
 
       const input = fieldInputs.get(field.id);
-      if(input && input.value !== out) input.value = out;
+      // se for checkbox, não tenta setar value
+      if(input && input.type !== "checkbox" && input.value !== out) input.value = out;
     }
   }
   saveData();
@@ -122,28 +225,63 @@ function createFieldEl(field, sheetEl){
   wrap.style.width  = field.w + "%";
   wrap.style.height = field.h + "%";
 
-  const input = field.type === "textarea" ? document.createElement("textarea") : document.createElement("input");
-  input.className = "input";
-  if(input.tagName === "INPUT") input.type = "text";
+  let control = null;
 
-  input.value = data[field.id] ?? "";
-  fieldInputs.set(field.id, input);
+  // ✅ Checkbox (0/1) — agora no lugar certo
+  if(field.type === "checkbox"){
+    wrap.classList.add("checkbox");
 
-  if(field.readonly || field.calc){
-    input.readOnly = true;
-    input.tabIndex = -1;
-    input.classList.add("readonly");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "input checkbox";
+
+    cb.checked = Number(data[field.id] ?? 0) === 1;
+    fieldInputs.set(field.id, cb);
+
+    // readonly/calc -> trava
+    if(field.readonly || field.calc){
+      cb.disabled = true;
+      cb.tabIndex = -1;
+    }
+
+    cb.addEventListener("change", () => {
+      data[field.id] = cb.checked ? 1 : 0;
+      saveData();
+      recomputeAll();
+    });
+
+    cb.addEventListener("mousedown", (e)=>{ e.stopPropagation(); });
+
+    wrap.appendChild(cb);
+    control = cb;
+  } else {
+    const input = field.type === "textarea"
+      ? document.createElement("textarea")
+      : document.createElement("input");
+
+    input.className = "input";
+    if(input.tagName === "INPUT") input.type = "text";
+
+    input.value = data[field.id] ?? "";
+    fieldInputs.set(field.id, input);
+
+    if(field.readonly || field.calc){
+      input.readOnly = true;
+      input.tabIndex = -1;
+      input.classList.add("readonly");
+    }
+
+    input.addEventListener("input", debounce(() => {
+      data[field.id] = input.value;
+      saveData();
+      recomputeAll();
+    }, 120));
+
+    input.addEventListener("mousedown", (e)=>{ e.stopPropagation(); });
+
+    wrap.appendChild(input);
+    control = input;
   }
-
-  input.addEventListener("input", debounce(() => {
-    data[field.id] = input.value;
-    saveData();
-    recomputeAll();
-  }, 120));
-
-  input.addEventListener("mousedown", (e)=>{ e.stopPropagation(); });
-
-  wrap.appendChild(input);
 
   const resizer = document.createElement("div");
   resizer.className = "resizer";
@@ -212,7 +350,6 @@ function renderSheet(sheetEl, page){
 function renderAll(){
   fieldInputs = new Map();
 
-  // prepara containers
   const sheetsWrap = $("#sheets");
   sheetsWrap.innerHTML = "";
   const nav = $("#pageNav");
@@ -312,32 +449,3 @@ function wireUI(){
   renderAll();
   wireUI();
 })();
-
-// --- Checkbox (salva 1/0) ---
-if (field.type === "checkbox") {
-  wrap.classList.add("checkbox");
-
-  const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.className = "input checkbox";
-
-  cb.checked = Number(data[field.id] ?? 0) === 1;
-
-  fieldInputs.set(field.id, cb);
-
-  cb.addEventListener("change", () => {
-    data[field.id] = cb.checked ? 1 : 0;
-    saveData();
-    recomputeAll();
-  });
-
-  cb.addEventListener("mousedown", (e) => e.stopPropagation());
-
-  wrap.appendChild(cb);
-
-  const resizer = document.createElement("div");
-  resizer.className = "resizer";
-  wrap.appendChild(resizer);
-
-  return wrap;
-}
