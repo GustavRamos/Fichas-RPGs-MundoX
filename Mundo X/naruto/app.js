@@ -86,6 +86,39 @@ function tokenizeExpr(s){
   return out;
 }
 
+// --- parser sem eval/new Function (funciona com CSP/SES) ---
+function tokenizeExpr(s){
+  const out = [];
+  let i = 0;
+
+  while(i < s.length){
+    const c = s[i];
+    if(/\s/.test(c)){ i++; continue; }
+
+    if(/[0-9.]/.test(c)){
+      let j = i+1;
+      while(j < s.length && /[0-9.]/.test(s[j])) j++;
+      out.push({t:"num", v: parseFloat(s.slice(i,j))});
+      i = j; continue;
+    }
+
+    if(/[a-zA-Z_]/.test(c)){
+      let j = i+1;
+      while(j < s.length && /[a-zA-Z0-9_]/.test(s[j])) j++;
+      out.push({t:"id", v: s.slice(i,j)});
+      i = j; continue;
+    }
+
+    if("+-*/(),".includes(c)){
+      out.push({t:c, v:c});
+      i++; continue;
+    }
+
+    return null;
+  }
+  return out;
+}
+
 function evalCalc(expr){
   try{
     if(!expr || typeof expr !== "string") return 0;
@@ -146,6 +179,7 @@ function evalCalc(expr){
       if(tok.t === "id"){
         const name = tok.v; next();
 
+        // chamada de função: max(...), floor(...)
         if(peek() && peek().t === "("){
           next();
           const args = parseArgs();
@@ -157,6 +191,7 @@ function evalCalc(expr){
           return Number.isFinite(res) ? res : 0;
         }
 
+        // variável: level, vigor_bonus...
         return num(name);
       }
 
@@ -170,6 +205,7 @@ function evalCalc(expr){
     return 0;
   }
 }
+
 
 function recomputeAll(){
   if(!LAYOUT?.pages?.length) return;
